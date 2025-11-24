@@ -11,11 +11,7 @@ use yellowstone_grpc_proto::prelude::{
 };
 
 use scanner::{
-    cli::Cli,
-    config::Config,
-    process::Process,
-    grpc::Grpc,
-    ScannerContext,
+    ScannerContext, cli::Cli, config::Config, dashboard::Dashboard, grpc::Grpc, process::Process
 };
 
 #[tokio::main]
@@ -56,11 +52,13 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.parse::<Pubkey>())
         .collect::<Result<Vec<_>, _>>()?;
 
-    let scanner_context = ScannerContext::new();
-    let grpc_connections = Vec::new();
+    let scanner_context = Arc::new(ScannerContext::new());
+    let grpc_connections: Vec<Arc<Grpc>> = Vec::new();
 
-    // Clone transactions Arc for TTL cleanup task (before scanner_context is moved)
-    let arb_transactions_for_ttl = scanner_context.transactions.clone();
+    // Clone scanner context for various tasks
+    let scanner_context_for_grpc = scanner_context.clone();
+    let scanner_context_for_ttl = scanner_context.clone();
+    let scanner_context_for_dashboard = scanner_context.clone();
 
     let (subscribe_tx, mut subscribe_rx) = mpsc::unbounded_channel::<SubscribeUpdate>();
 
@@ -86,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
     // Receive Grpc Messages
     tokio::spawn({
         let grpc_connections_clone = grpc_connections.clone();
+        let scanner_context = scanner_context_for_grpc;
         async move {
             while let Some(subscribe_update) = subscribe_rx.recv().await {
                 if let Some(ref update_oneof) = subscribe_update.update_oneof {
@@ -160,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Transaction TTL cleanup task
     tokio::spawn({
-        let arb_transactions_clone = arb_transactions_for_ttl;
+        let scanner_context = scanner_context_for_ttl;
         let transaction_ttl_secs_clone = config.ttl.transaction_ttl_secs;
         let ttl_interval_secs_clone = config.ttl.ttl_interval_secs;
         async move {
@@ -174,8 +173,8 @@ async fn main() -> anyhow::Result<()> {
                     .as_secs() as i64;
 
                 // Remove transactions older than TTL
-                let removed_count = arb_transactions_clone.len();
-                arb_transactions_clone.retain(|_sig, arb_transaction| {
+                let removed_count = scanner_context.transactions.len();
+                scanner_context.transactions.retain(|_sig, arb_transaction| {
                     if let Some(timestamp) = arb_transaction.timestamp {
                         // Keep if timestamp is within TTL window
                         current_time_secs - timestamp <= transaction_ttl_secs_clone as i64
@@ -184,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
                         true
                     }
                 });
-                let removed_count = removed_count - arb_transactions_clone.len();
+                let removed_count = removed_count - scanner_context.transactions.len();
 
                 if removed_count > 0 {
                     debug!("Removed {} expired transactions", removed_count);
@@ -193,8 +192,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Wait for Ctrl+C - when this returns, runtime drops all spawned tasks
-    tokio::signal::ctrl_c().await?;
+    // Run the dashboard (blocks until user quits with Ctrl+C, Esc, or Q)
+    Dashboard::new(scanner_context_for_dashboard);
+
     info!("Shutting down scanner");
 
     Ok(())
