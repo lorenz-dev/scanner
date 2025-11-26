@@ -1,7 +1,6 @@
 pub mod goosefx;
 pub mod meteora_damm;
 pub mod meteora_dlmm;
-pub mod meteora_pools;
 pub mod pump_fun;
 pub mod raydium_v4;
 pub mod raydium_clmm;
@@ -18,11 +17,15 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{ArbTransactionInstruction, TokenAccount, TokenAccounts, token::{TokenAmount, TokenWithAmount}};
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct DexSwap {
+    pub swap_program_id: Pubkey,
+    pub pools: Vec<Pubkey>,
+    pub pool_owner: Pubkey,  // Authority/owner of the pool (PDA address)
     pub token_in: TokenAmount,
     pub token_out: TokenAmount,
     pub fees: Vec<TokenAmount>,
+    pub vault_accounts: Vec<Pubkey>,  // Token accounts (vaults) involved in this swap
 }
 
 pub struct DexConfig {
@@ -52,6 +55,7 @@ pub enum DexParserError {
     TokenError(crate::token::TokenError),
     TokenWithAmountError(crate::token::TokenWithAmountError),
     InvalidInstructionData(String),
+    InsufficientInnerInstructions,
 }
 
 impl From<crate::token::TokenError> for DexParserError {
@@ -154,5 +158,10 @@ impl DexRegistry {
         } else {
             Err(DexParserError::ParserNotFound(program_id.to_string()))
         }
+    }
+
+    /// Get the DEX name from a program ID
+    pub fn get_dex_name(&self, program_id: &Pubkey) -> Option<&str> {
+        self.parsers.get(program_id).map(|parser| parser.config().name)
     }
 }

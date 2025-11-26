@@ -58,9 +58,12 @@ impl MeteoraDelmmParser {
         accounts: &Vec<Pubkey>,
         _token_accounts: &TokenAccounts,
     ) -> Result<DexSwap, DexParserError> {
-        let mut swap = DexSwap::default();
-
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
+
+        let swap_program_id = accounts[instruction.program_id_index as usize];
+
+        let pool_a = instruction_accounts[2];
+        let pool_b = instruction_accounts[3];
 
         let token_x_mint = instruction_accounts[6];
         let token_y_mint = instruction_accounts[7];
@@ -80,62 +83,71 @@ impl MeteoraDelmmParser {
                     (token_y_mint, token_x_mint)
                 };
 
-                swap.token_in = TokenAmount {
-                    mint: token_in_mint,
-                    amount: cpi_log.amount_in,
-                };
-
-                swap.token_out = TokenAmount {
-                    mint: token_out_mint,
-                    amount: cpi_log.amount_out,
-                };
-
-                // Add fees
+                // Collect fees
+                let mut fees = Vec::new();
                 if cpi_log.fee > 0 {
-                    swap.fees.push(TokenAmount {
+                    fees.push(TokenAmount {
                         mint: token_in_mint,
                         amount: cpi_log.fee,
                     });
                 }
-
                 if cpi_log.protocol_fee > 0 {
-                    swap.fees.push(TokenAmount {
+                    fees.push(TokenAmount {
                         mint: token_in_mint,
                         amount: cpi_log.protocol_fee,
                     });
                 }
-
                 if cpi_log.host_fee > 0 {
-                    swap.fees.push(TokenAmount {
+                    fees.push(TokenAmount {
                         mint: token_in_mint,
                         amount: cpi_log.host_fee,
                     });
                 }
                 if cpi_log.fee_bps > 0 {
-                    swap.fees.push(TokenAmount {
+                    fees.push(TokenAmount {
                         mint: token_in_mint,
                         amount: cpi_log.fee_bps,
                     });
                 }
 
-                return Ok(swap);
+                return Ok(DexSwap {
+                    swap_program_id,
+                    pools: vec![pool_a, pool_b],
+                    pool_owner: cpi_log.lb_pair,  // lb_pair is the pool owner
+                    token_in: TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.amount_in,
+                    },
+                    token_out: TokenAmount {
+                        mint: token_out_mint,
+                        amount: cpi_log.amount_out,
+                    },
+                    fees,
+                    vault_accounts: Vec::new(),
+                });
             }
         }
 
         // Fallback
         let ins_data: SwapInstructionData = Self::parse_instruction_data(instruction)?;
 
-        swap.token_in = TokenAmount {
-            mint: token_x_mint,
-            amount: ins_data.amount_in
-        };
+        let lb_pair = instruction_accounts[0];
 
-        swap.token_out = TokenAmount {
-            mint: token_y_mint,
-            amount: ins_data.min_amount_out
-        };
-
-        return Ok(swap);
+        Ok(DexSwap {
+            swap_program_id,
+            pools: vec![pool_a, pool_b],
+            pool_owner: lb_pair,  // lb_pair is the pool owner
+            token_in: TokenAmount {
+                mint: token_x_mint,
+                amount: ins_data.amount_in
+            },
+            token_out: TokenAmount {
+                mint: token_y_mint,
+                amount: ins_data.min_amount_out
+            },
+            fees: Vec::new(),
+            vault_accounts: Vec::new(),
+        })
     }
 
     fn parse_swap2(

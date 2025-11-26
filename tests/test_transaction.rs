@@ -17,7 +17,8 @@ pub fn test_transaction() {
         .with_test_writer()
         .try_init();
 
-    let tx_update: SubscribeUpdateTransaction = load_transaction_update("4RTuy7K6oDgVZ9AHRJhekycmv2SwmFVya1QBiHLRSXGwUJtmrWF4BRA5XDG4cyyYWjZ3W38EWrH3rAVyirdLpFdV.pb");
+    let tx_update: SubscribeUpdateTransaction = load_transaction_update("1CZkmo3purfWxe8Jwt6Sdxb7mcrmHw3BchmA5mmrYEPcRUr9zJMsEzJf9S5MD3JNHH8GvThynXzx967f2TwVSQ9.pb");
+    // let tx_update: SubscribeUpdateTransaction = load_transaction_update("2ibprU4CWxQMmA2WFM5ikx56Tq1TpPUFF8ysx4EadyTvRq3KPnnJ3Ab2nkiGxTCD19vS9WRLuYuTj7v5y2Yjjq7R.pb");
 
     let _ = Process::process_transaction(tx_update, |mint| {
         println!("OnMintAccount: {}", mint);
@@ -68,7 +69,7 @@ pub fn test_all_transaction() {
             }).count();
 
             let raw_instructions = arb_tx.instructions.iter().filter(|inst| {
-                matches!(inst, scanner::ArbTransactionInstruction::Raw(_))
+                matches!(inst, scanner::ArbTransactionInstruction::Raw(_, _))
             }).count();
 
             if raw_instructions > 0 {

@@ -38,12 +38,19 @@ impl WhirlpoolsParser {
         accounts: &Vec<Pubkey>,
         token_accounts: &TokenAccounts,
     ) -> Result<DexSwap, DexParserError> {
-        let mut swap = DexSwap::default();
-
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
+
+        // Swap program ID from the instruction
+        let swap_program_id = accounts[instruction.program_id_index as usize];
+
+        // Whirlpools pool is at account index 2
+        let pool = instruction_accounts[4];
 
         let token_a = instruction_accounts[5];
         let token_b = instruction_accounts[6];
+
+        let pool_a = instruction_accounts[8];
+        let pool_b = instruction_accounts[10];
 
         let ins_data = Self::parse_instruction_data(instruction)?;
 
@@ -53,19 +60,29 @@ impl WhirlpoolsParser {
             (token_b, token_a)
         };
 
-        let transfer_in = Token::token_transfer(inner_instructions[0], accounts, token_accounts)?;
-        swap.token_in = TokenAmount {
-            mint: input_token,
-            amount: transfer_in.amount
-        };
+        let inner_instruction_0 = inner_instructions.get(0)
+            .ok_or(DexParserError::InsufficientInnerInstructions)?;
+        let transfer_in = Token::token_transfer(inner_instruction_0, accounts, token_accounts)?;
 
-        let transfer_out = Token::token_transfer(inner_instructions[1], accounts, token_accounts)?;
-        swap.token_out = TokenAmount {
-            mint: output_token,
-            amount: transfer_out.amount
-        };
+        let inner_instruction_1 = inner_instructions.get(1)
+            .ok_or(DexParserError::InsufficientInnerInstructions)?;
+        let transfer_out = Token::token_transfer(inner_instruction_1, accounts, token_accounts)?;
 
-        Ok(swap)
+        Ok(DexSwap {
+            swap_program_id,
+            pools: vec![pool_a, pool_b],
+            pool_owner: pool,  // pool is the pool owner
+            token_in: TokenAmount {
+                mint: input_token,
+                amount: transfer_in.amount
+            },
+            token_out: TokenAmount {
+                mint: output_token,
+                amount: transfer_out.amount
+            },
+            fees: Vec::new(),
+            vault_accounts: Vec::new(),
+        })
     }
 
     fn parse_instruction_data(instruction: &InnerInstruction) -> Result<SwapInstructionData, DexParserError> {

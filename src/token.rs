@@ -19,6 +19,7 @@ pub struct TokenAmount {
 pub struct TokenWithAmount {
     pub amount: u64,
     pub token_info: TokenInfo,
+    pub source_account: Option<Pubkey>,  // The token account (vault) this came from
 }
 
 #[derive(Debug)]
@@ -153,6 +154,7 @@ impl TokenProgram {
                 Ok(TokenWithAmount {
                     amount,
                     token_info,
+                    source_account: Some(source_account_pubkey),
                 })
             }
             12 => {
@@ -173,12 +175,16 @@ impl TokenProgram {
                     .copied()
                     .unwrap_or_default();
 
+                // Get source account for TransferChecked (index 0)
+                let source_account = accounts.get(account_indices[0]).copied();
+
                 Ok(TokenWithAmount {
                     amount,
                     token_info: TokenInfo {
                         mint,
                         decimals,
                     },
+                    source_account,
                 })
             }
             _ => Err(TokenError::InvalidInstructionData(format!("Unknown instruction type: {}", instruction_type))),

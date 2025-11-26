@@ -8,6 +8,7 @@ use crate::grpc::GrpcConfig;
 
 #[derive(Deserialize)]
 pub struct Config {
+    pub base_asset: String,
     pub grpc: Vec<GrpcConfig>,
     pub arb_programs: Vec<String>,
     pub ttl: TtlConfig,

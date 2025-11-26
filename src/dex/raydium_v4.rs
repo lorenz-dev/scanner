@@ -38,25 +38,48 @@ impl RaydiumV4Parser {
         accounts: &Vec<Pubkey>,
         token_accounts: &TokenAccounts,
     ) -> Result<DexSwap, DexParserError> {
-        let mut swap = DexSwap::default();
+        let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
-        // let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
+        // Swap program ID from the instruction
+        let swap_program_id = accounts[instruction.program_id_index as usize];
 
-        // let input_token = instruction_accounts[5];
-        // let output_token = instruction_accounts[6];
+        // Raydium V4 pool is at account index 1 (AMM ID)
+        let pool = instruction_accounts[1];
 
-        let transfer_in = Token::token_transfer(inner_instructions[0], accounts, token_accounts)?;
-        swap.token_in = TokenAmount {
-            mint: transfer_in.token_info.mint,
-            amount: transfer_in.amount,
-        };
+        let pool_a = instruction_accounts[4];
+        let pool_b = instruction_accounts[5];
 
-        let transfer_out = Token::token_transfer(inner_instructions[1], accounts, token_accounts)?;
-        swap.token_out = TokenAmount {
-            mint: transfer_out.token_info.mint,
-            amount: transfer_out.amount,
-        };
+        let inner_instruction_0 = inner_instructions.get(0)
+            .ok_or(DexParserError::InsufficientInnerInstructions)?;
+        let transfer_in = Token::token_transfer(inner_instruction_0, accounts, token_accounts)?;
 
-        Ok(swap)
+        let inner_instruction_1 = inner_instructions.get(1)
+            .ok_or(DexParserError::InsufficientInnerInstructions)?;
+        let transfer_out = Token::token_transfer(inner_instruction_1, accounts, token_accounts)?;
+
+        // Collect vault accounts from transfers
+        let mut vault_accounts = Vec::new();
+        if let Some(source) = transfer_in.source_account {
+            vault_accounts.push(source);
+        }
+        if let Some(source) = transfer_out.source_account {
+            vault_accounts.push(source);
+        }
+
+        Ok(DexSwap {
+            swap_program_id,
+            pools: vec![pool_a, pool_b],
+            pool_owner: pool,  // pool is the pool owner
+            token_in: TokenAmount {
+                mint: transfer_in.token_info.mint,
+                amount: transfer_in.amount,
+            },
+            token_out: TokenAmount {
+                mint: transfer_out.token_info.mint,
+                amount: transfer_out.amount,
+            },
+            fees: Vec::new(),
+            vault_accounts,
+        })
     }
 }

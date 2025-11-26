@@ -3,6 +3,14 @@ name = "scanner"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "scanner"
+path = "src/main.rs"
+
+[[bin]]
+name = "organize_transactions"
+path = "src/bin/organize_transactions.rs"
+
 [dependencies]
 anyhow = "1.0.100"
 arc-swap = "1.7.1"

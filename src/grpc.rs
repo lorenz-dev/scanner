@@ -33,6 +33,8 @@ pub struct Grpc {
 pub struct GrpcConnectionStatus {
     pub status: ConnectionStatus,
     pub ping: u64,
+    pub last_update: std::time::Instant,
+    pub ping_sent_at: Option<std::time::Instant>,
 }
 
 pub enum ConnectionStatus {
@@ -48,6 +50,8 @@ impl Grpc {
             connection_status: Arc::new(Mutex::new(GrpcConnectionStatus {
                 status: ConnectionStatus::Disconnected,
                 ping: 0,
+                last_update: std::time::Instant::now(),
+                ping_sent_at: None,
             })),
             subscribe_sink: Arc::new(Mutex::new(None)),
             transactions_filters: Arc::new(DashMap::new()),
@@ -81,14 +85,26 @@ impl Grpc {
                     let exponential_delay = BASE_DELAY_MS * 2_u64.pow(attempt.min(10));
                     let delay = Duration::from_millis(exponential_delay.min(MAX_DELAY_MS));
 
-                    warn!(
-                        "{} failed on {} (attempt {}): {:?}. Retrying in {:?}...",
-                        operation_name,
-                        self.config.endpoint,
-                        attempt + 1,
-                        err,
-                        delay
-                    );
+                    // Only log warnings after a few attempts to reduce noise
+                    if attempt < 3 {
+                        debug!(
+                            "{} failed on {} (attempt {}): {:?}. Retrying in {:?}...",
+                            operation_name,
+                            self.config.endpoint,
+                            attempt + 1,
+                            err,
+                            delay
+                        );
+                    } else {
+                        warn!(
+                            "{} failed on {} (attempt {}): {:?}. Retrying in {:?}...",
+                            operation_name,
+                            self.config.endpoint,
+                            attempt + 1,
+                            err,
+                            delay
+                        );
+                    }
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
@@ -116,44 +132,74 @@ impl Grpc {
                 let (subscribe_sink, mut stream) = client.subscribe().await
                     .map_err(|e| anyhow::anyhow!("Failed to create subscription stream: {:?}", e))?;
 
-                
-                self.connection_status.lock().await.status = ConnectionStatus::Connected;
+
+                // Update status to Connected and reset ping
+                {
+                    let mut status = self.connection_status.lock().await;
+                    status.status = ConnectionStatus::Connected;
+                    status.ping = 0; // Reset ping on new connection
+                    status.ping_sent_at = None; // Clear any pending ping
+                }
 
                 // Store the sink for later use
                 *self.subscribe_sink.lock().await = Some(Box::new(subscribe_sink));
                 info!("Subscription stream established for {}", self.config.endpoint);
 
-                // Automatically resubscribe if we have filters configured
-                if !self.transactions_filters.is_empty() || !self.accounts_filters.is_empty() {
-                    if let Err(e) = self.subscribe().await {
-                        warn!("Failed to send subscription after reconnection: {}", e);
-                    }
-                }
+                // Note: Subscription requests are sent separately via subscribe_transactions() or subscribe_accounts()
+                // from main.rs, so we don't automatically resubscribe here to avoid duplicate calls
 
                 // Process stream (no retry here, but wrapped in resilient_retry for reconnection)
                 while let Some(subscribe_update) = stream.next().await {
                     match subscribe_update {
                         Ok(subscribe_update) => {
+                            // Check if this is a Pong response to calculate roundtrip ping
+                            if let Some(ref update_oneof) = subscribe_update.update_oneof {
+                                if let yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof::Pong(_) = update_oneof {
+                                    let mut status = self.connection_status.lock().await;
+                                    if let Some(sent_at) = status.ping_sent_at {
+                                        let now = std::time::Instant::now();
+                                        let roundtrip = now.duration_since(sent_at);
+                                        status.ping = roundtrip.as_millis() as u64;
+                                        status.ping_sent_at = None; // Clear after calculating
+                                        info!("Roundtrip ping for {}: {}ms", self.config.endpoint, status.ping);
+                                    }
+                                    drop(status);
+                                }
+                            }
+
                             if tx.send(subscribe_update).is_err() {
                                 info!("Receiver dropped, exiting cleanly");
                                 return Ok(());
                             }
                         },
                         Err(e) => {
-                            // Stream errors are logged but we don't force exit here.
+                            // Stream errors indicate connection problems - update status immediately
+                            error!("Stream error from {}: {:?}", self.config.endpoint, e);
+                            self.connection_status.lock().await.status = ConnectionStatus::Disconnected;
+
                             // The gRPC stream closes itself after an error - the next
                             // stream.next() will return None, which naturally exits this loop
                             // and triggers reconnection via resilient_retry.
-                            error!("Stream error from {}: {:?}", self.config.endpoint, e);
                         }
                     }
                 }
+
+                warn!("Stream connection closed for {}", self.config.endpoint);
+
+                // Update status to disconnected when stream ends
+                self.connection_status.lock().await.status = ConnectionStatus::Disconnected;
 
                 info!("Stream ended for {}, will reconnect...", self.config.endpoint);
                 Err(anyhow::anyhow!("Stream ended"))
             },
             |_err| {
-                // Status will be updated when reconnection succeeds
+                // Update status to disconnected on any error
+                tokio::spawn({
+                    let status = self.connection_status.clone();
+                    async move {
+                        status.lock().await.status = ConnectionStatus::Disconnected;
+                    }
+                });
             },
         ).await
     }
@@ -202,6 +248,34 @@ impl Grpc {
         Ok(())
     }
 
+    pub async fn send_ping(&self) -> Result<()> {
+        let ping_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i32;
+
+        let request = SubscribeRequest {
+            ping: Some(yellowstone_grpc_proto::prelude::SubscribeRequestPing { id: ping_id }),
+            ..Default::default()
+        };
+
+        // Record when we sent the ping
+        self.connection_status.lock().await.ping_sent_at = Some(std::time::Instant::now());
+
+        let mut sink_guard = self.subscribe_sink.lock().await;
+        match sink_guard.as_mut() {
+            Some(sink) => {
+                sink.send(request).await
+                    .map_err(|e| anyhow::anyhow!("Failed to send ping: {:?}", e))?;
+                debug!("Ping sent to {}", self.config.endpoint);
+                Ok(())
+            }
+            None => {
+                Err(anyhow::anyhow!("Connection not established"))
+            }
+        }
+    }
+
     pub async fn subscribe_transactions(&self, account_pubkeys: Vec<Pubkey>) -> Result<()> {
         if account_pubkeys.is_empty() {
             anyhow::bail!("No accounts provided for transaction subscription");
@@ -231,20 +305,33 @@ impl Grpc {
             anyhow::bail!("No accounts provided for account subscription");
         }
 
-        debug!("Subscribing to {} accounts on {}", account_pubkeys.len(), self.config.endpoint);
+        let mut new_accounts = Vec::new();
 
         for account_pubkey in account_pubkeys {
-            self.accounts_filters.insert(
-                format!("account_{}", account_pubkey),
-                SubscribeRequestFilterAccounts {
-                    account: vec![account_pubkey.to_string()],
-                    owner: vec![],
-                    filters: vec![],
-                    nonempty_txn_signature: None,
-                }
-            );
+            let key = format!("account_{}", account_pubkey);
+
+            // Only add if not already subscribed
+            if !self.accounts_filters.contains_key(&key) {
+                self.accounts_filters.insert(
+                    key.clone(),
+                    SubscribeRequestFilterAccounts {
+                        account: vec![account_pubkey.to_string()],
+                        owner: vec![],
+                        filters: vec![],
+                        nonempty_txn_signature: None,
+                    }
+                );
+                new_accounts.push(account_pubkey);
+            }
         }
 
+        // Only subscribe if there are new accounts
+        if new_accounts.is_empty() {
+            debug!("All accounts already subscribed on {}", self.config.endpoint);
+            return Ok(());
+        }
+
+        debug!("Subscribing to {} new accounts on {}", new_accounts.len(), self.config.endpoint);
         self.subscribe().await
     }
 }
