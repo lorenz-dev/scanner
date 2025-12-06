@@ -3,7 +3,7 @@ use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use yellowstone_grpc_proto::prelude::InnerInstruction;
 
-use crate::{SwapInstruction, TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DiscriminatorConfig}};
+use crate::{TokenAccount, TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DexSwap, DiscriminatorConfig}, token::{Token, TokenAmount}};
 
 #[derive(Debug)]
 struct SwapParams {
@@ -100,8 +100,20 @@ impl MeteoraDAMMParser {
         instruction: &InnerInstruction,
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
-        _token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
+        token_accounts: &TokenAccounts,
+    ) -> Result<DexSwap, DexParserError> {
+        // let transfer_in = Token::token_transfer(inner_instructions[0], accounts, token_accounts)?;
+        // swap.token_in = TokenAmount {
+        //     mint: token_b_mint,
+        //     amount: transfer_in.amount,
+        // };
+
+        // let transfer_out = Token::token_transfer(inner_instructions[1], accounts, token_accounts)?;
+        // swap.token_out = TokenAmount {
+        //     mint: token_a_mint,
+        //     amount: transfer_out.amount,
+        // };
+
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
         let swap_program_id = accounts[instruction.program_id_index as usize];
@@ -126,26 +138,26 @@ impl MeteoraDAMMParser {
         // Collect fees from the CPI log
         let mut fees = Vec::new();
         if cpi_log.swap_result.trading_fee > 0 {
-            fees.push((token_in.to_string(), cpi_log.swap_result.trading_fee));
+            fees.push(TokenAmount { mint: token_in, amount: cpi_log.swap_result.trading_fee });
         }
         if cpi_log.swap_result.protocol_fee > 0 {
-            fees.push((token_in.to_string(), cpi_log.swap_result.protocol_fee));
+            fees.push(TokenAmount { mint: token_in, amount: cpi_log.swap_result.protocol_fee });
         }
         if cpi_log.swap_result.partner_fee > 0{
-            fees.push((token_in.to_string(), cpi_log.swap_result.partner_fee));
+            fees.push(TokenAmount { mint: token_in, amount: cpi_log.swap_result.partner_fee });
         }
         if cpi_log.swap_result.referral_fee > 0{
-            fees.push((token_in.to_string(), cpi_log.swap_result.referral_fee));
+            fees.push(TokenAmount { mint: token_in, amount: cpi_log.swap_result.referral_fee });
         }
 
-        Ok(SwapInstruction {
+        Ok(DexSwap {
             swap_program_id,
             pools: vec![pool_a, pool_b],
-            amount_in: cpi_log.included_transfer_fee_amount_in,
-            amount_out: cpi_log.excluded_transfer_fee_amount_out,
-            token_in: token_in.to_string(),
-            token_out: token_out.to_string(),
+            pool_owner: cpi_log.pool,  // pool is the pool owner
+            token_in: TokenAmount { mint: token_in, amount: cpi_log.included_transfer_fee_amount_in },
+            token_out: TokenAmount { mint: token_out, amount: cpi_log.excluded_transfer_fee_amount_out },
             fees,
+            vault_accounts: Vec::new(),
         })
     }
 

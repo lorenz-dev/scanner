@@ -2,7 +2,7 @@ use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use yellowstone_grpc_proto::prelude::InnerInstruction;
 
-use crate::{TokenAccounts, dex::{DexConfig, DexParser, DexParserError, SwapInstruction, DiscriminatorConfig}};
+use crate::{TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DexSwap, DiscriminatorConfig}, token::TokenAmount};
 
 #[derive(Debug)]
 struct CpiLog {
@@ -57,7 +57,7 @@ impl MeteoraDelmmParser {
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
         _token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
+    ) -> Result<DexSwap, DexParserError> {
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
         let swap_program_id = accounts[instruction.program_id_index as usize];
@@ -86,26 +86,44 @@ impl MeteoraDelmmParser {
                 // Collect fees
                 let mut fees = Vec::new();
                 if cpi_log.fee > 0 {
-                    fees.push((token_in_mint.to_string(), cpi_log.fee));
+                    fees.push(TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.fee,
+                    });
                 }
                 if cpi_log.protocol_fee > 0 {
-                    fees.push((token_in_mint.to_string(), cpi_log.protocol_fee));
+                    fees.push(TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.protocol_fee,
+                    });
                 }
                 if cpi_log.host_fee > 0 {
-                    fees.push((token_in_mint.to_string(), cpi_log.host_fee));
+                    fees.push(TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.host_fee,
+                    });
                 }
                 if cpi_log.fee_bps > 0 {
-                    fees.push((token_in_mint.to_string(), cpi_log.fee_bps));
+                    fees.push(TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.fee_bps,
+                    });
                 }
 
-                return Ok(SwapInstruction {
+                return Ok(DexSwap {
                     swap_program_id,
                     pools: vec![pool_a, pool_b],
-                    amount_in: cpi_log.amount_in,
-                    amount_out: cpi_log.amount_out,
-                    token_in: token_in_mint.to_string(),
-                    token_out: token_out_mint.to_string(),
+                    pool_owner: cpi_log.lb_pair,  // lb_pair is the pool owner
+                    token_in: TokenAmount {
+                        mint: token_in_mint,
+                        amount: cpi_log.amount_in,
+                    },
+                    token_out: TokenAmount {
+                        mint: token_out_mint,
+                        amount: cpi_log.amount_out,
+                    },
                     fees,
+                    vault_accounts: Vec::new(),
                 });
             }
         }
@@ -113,16 +131,22 @@ impl MeteoraDelmmParser {
         // Fallback
         let ins_data: SwapInstructionData = Self::parse_instruction_data(instruction)?;
 
-        let _lb_pair = instruction_accounts[0];
+        let lb_pair = instruction_accounts[0];
 
-        Ok(SwapInstruction {
+        Ok(DexSwap {
             swap_program_id,
             pools: vec![pool_a, pool_b],
-            amount_in: ins_data.amount_in,
-            amount_out: ins_data.min_amount_out,
-            token_in: token_x_mint.to_string(),
-            token_out: token_y_mint.to_string(),
+            pool_owner: lb_pair,  // lb_pair is the pool owner
+            token_in: TokenAmount {
+                mint: token_x_mint,
+                amount: ins_data.amount_in
+            },
+            token_out: TokenAmount {
+                mint: token_y_mint,
+                amount: ins_data.min_amount_out
+            },
             fees: Vec::new(),
+            vault_accounts: Vec::new(),
         })
     }
 
@@ -131,8 +155,8 @@ impl MeteoraDelmmParser {
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
         token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
-        // let mut swap = SwapInstruction::default();
+    ) -> Result<DexSwap, DexParserError> {
+        // let mut swap = DexSwap::default();
 
         // let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 

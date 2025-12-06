@@ -2,7 +2,7 @@ use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use yellowstone_grpc_proto::prelude::InnerInstruction;
 
-use crate::{TokenAccounts, dex::{DexConfig, DexParser, DexParserError, SwapInstruction, DiscriminatorConfig}, token::Token};
+use crate::{TokenAccount, TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DexSwap, DiscriminatorConfig}, token::{Token, TokenAmount}};
 
 pub struct WhirlpoolsParser {
     config: DexConfig,
@@ -37,14 +37,14 @@ impl WhirlpoolsParser {
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
         token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
+    ) -> Result<DexSwap, DexParserError> {
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
         // Swap program ID from the instruction
         let swap_program_id = accounts[instruction.program_id_index as usize];
 
         // Whirlpools pool is at account index 2
-        let _pool = instruction_accounts[4];
+        let pool = instruction_accounts[4];
 
         let token_a = instruction_accounts[5];
         let token_b = instruction_accounts[6];
@@ -68,14 +68,20 @@ impl WhirlpoolsParser {
             .ok_or(DexParserError::InsufficientInnerInstructions)?;
         let transfer_out = Token::token_transfer(inner_instruction_1, accounts, token_accounts)?;
 
-        Ok(SwapInstruction {
+        Ok(DexSwap {
             swap_program_id,
             pools: vec![pool_a, pool_b],
-            amount_in: transfer_in.amount,
-            amount_out: transfer_out.amount,
-            token_in: input_token.to_string(),
-            token_out: output_token.to_string(),
+            pool_owner: pool,  // pool is the pool owner
+            token_in: TokenAmount {
+                mint: input_token,
+                amount: transfer_in.amount
+            },
+            token_out: TokenAmount {
+                mint: output_token,
+                amount: transfer_out.amount
+            },
             fees: Vec::new(),
+            vault_accounts: Vec::new(),
         })
     }
 

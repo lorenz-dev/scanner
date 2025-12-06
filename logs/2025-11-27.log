@@ -1,0 +1,8 @@
+[2m2025-11-27T06:04:54.329588Z[0m [32m INFO[0m [2mscanner::config[0m[2m:[0m Loaded config from config.toml
+[2m2025-11-27T06:04:54.330323Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Added to tx request: rvgxRnWNAWoLJkAc6S7y1zSNW9eAeFvpjV65YMHYxow
+[2m2025-11-27T06:04:54.330406Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Connecting to endpoint 0: http://ny-rpc.notarb.org:10000/
+[2m2025-11-27T06:04:54.330428Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Added to tx request: CroWg74XNDF8UMnAZVbXx49iVj7iJ7b4CsqTCVWF7aK
+[2m2025-11-27T06:04:54.330445Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Added to tx request: NA247a7YE9S3p9CdKmMyETx8TTwbSdVbVYHHxpnHTUV
+[2m2025-11-27T06:04:54.554584Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Connected to endpoint 0: http://ny-rpc.notarb.org:10000/
+[2m2025-11-27T06:04:54.774951Z[0m [32m INFO[0m [2mscanner::grpc::multi_grpc[0m[2m:[0m Subscription established for endpoint 0: http://ny-rpc.notarb.org:10000/
+[2m2025-11-27T06:04:56.713647Z[0m [32m INFO[0m [2mscanner[0m[2m:[0m Shutting Down!

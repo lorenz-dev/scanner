@@ -1,187 +1,117 @@
-pub mod cli;
-pub mod config;
-pub mod dex;
+use std::collections::HashMap;
+use std::sync::Arc;
+use dashmap::DashMap;
+use parking_lot::{RwLock};
+use solana_sdk::pubkey::Pubkey;
+use yellowstone_grpc_proto::prelude::TransactionError;
+use crate::grpc::ConnectionContext;
+use crate::token::TokenInfo;
+
 pub mod dashboard;
+pub mod dex;
 pub mod grpc;
 pub mod process;
 pub mod token;
+
+pub mod config;
+pub mod logger;
 pub mod utils;
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::str::FromStr;
-
-use dashmap::DashMap;
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signature;
-use yellowstone_grpc_proto::geyser::SubscribeUpdateTransaction;
-use yellowstone_grpc_proto::prelude::InnerInstruction;
-use crate::dex::DexSwap;
-use crate::process::ProgramInstruction;
-use crate::token::TokenInfo;
-
-
 pub struct ScannerContext {
-    pub connections: Arc<DashMap<String, grpc::GrpcConnectionStatus>>,
-    pub transactions: Arc<DashMap<Signature, ArbTransaction>>,
-    pub temp_txs: Arc<DashMap<Signature, SubscribeUpdateTransaction>>,
-    pub mints: Arc<DashMap<Pubkey, MintContext>>,
-    pub known_pools: Arc<DashMap<Pubkey, ()>>,
-    pub known_dex_programs: Arc<DashMap<Pubkey, ()>>,
-    pub arb_programs: Vec<Pubkey>,
-    pub arb_program_counts: Arc<DashMap<Pubkey, ArbProgramStats>>,
+    pub connections: Arc<RwLock<Vec<ConnectionContext>>>,
+    pub transactions: Arc<RwLock<Vec<ProcessedTransaction>>>,
+    pub mints: Arc<DashMap<String, Mint>>,
+    pub token_account_data: Arc<DashMap<String, MintData>>,
+    pub arb_programs: DashMap<String, Arc<(u64, u64)>>,
 }
 
 impl ScannerContext {
-    pub fn new(arb_programs: Vec<Pubkey>) -> Self {
-        let arb_program_counts = Arc::new(DashMap::new());
-
-        // Initialize counters for all arb programs
-        for program in &arb_programs {
-            arb_program_counts.insert(*program, ArbProgramStats::default());
+    pub fn new(arb_programs: Vec<String>) -> Self {
+        let arb_programs_map = DashMap::new();
+        for program in arb_programs {
+            arb_programs_map.insert(program, Arc::new((0u64, 0u64)));
         }
 
         Self {
-            connections: Arc::new(DashMap::new()),
-            transactions: Arc::new(DashMap::new()),
-            temp_txs: Arc::new(DashMap::new()),
+            connections: Arc::new(RwLock::new(Vec::new())),
+            transactions: Arc::new(RwLock::new(Vec::new())),
             mints: Arc::new(DashMap::new()),
-            known_pools: Arc::new(DashMap::new()),
-            known_dex_programs: Arc::new(DashMap::new()),
-            arb_programs,
-            arb_program_counts,
+            token_account_data: Arc::new(DashMap::new()),
+            arb_programs: arb_programs_map,
         }
     }
 
-    pub fn insert_transaction(&self, tx: ArbTransaction) {
-        // Only increment counters if this transaction belongs to a configured arb program
-        for program_instruction in &tx.program_instructions {
-            if let Some(mut stats) = self.arb_program_counts.get_mut(&program_instruction.program_id) {
-                if tx.is_success {
-                    stats.success_count += 1;
+    pub fn add_transaction(&self, tx: ProcessedTransaction) {
+        // Update arb program counters based on transaction success/failure
+        for ins in &tx.instructions {
+            if let Some(mut arb_program) = self.arb_programs.get_mut(&ins.program_id) {
+                let (success_count, fail_count) = &**arb_program;
+                if tx.err.is_none() {
+                    *arb_program = Arc::new((*success_count + 1, *fail_count));
                 } else {
-                    stats.fail_count += 1;
+                    *arb_program = Arc::new((*success_count, *fail_count + 1));
                 }
             }
         }
-
-        self.transactions.insert(tx.signature, tx);
+        self.transactions.write().push(tx);
     }
 
-    pub fn insert_received_transaction(&self, tx: SubscribeUpdateTransaction) {    
-        let tx_info = tx.clone().transaction.unwrap();
-        let sig_str = bs58::encode(&tx_info.signature).into_string();
-        let signature = Signature::from_str(&sig_str).unwrap();
-
-        self.temp_txs.insert(signature, tx);
+    pub fn remove_transactions(&self, tx_signatures: Vec<String>) {
+        self.transactions.write().retain(|tx| !tx_signatures.contains(&tx.signature));
     }
 
-    pub fn remove_received_transaction(&self, tx: SubscribeUpdateTransaction) {
-        let tx_info = tx.clone().transaction.unwrap();
-        let sig_str = bs58::encode(&tx_info.signature).into_string();
-        let signature = Signature::from_str(&sig_str).unwrap();
-
-        self.temp_txs.remove(&signature);
+    pub fn add_intermediate_mint(&self, mint: Mint) {
+        self.mints.insert(mint.program_id.clone(), mint);
     }
 
-    pub fn insert_mint(&self, ctx: MintContext) {
-        self.mints.insert(ctx.mint, ctx);
-    }
-
-    pub fn upsert_pool_liquidity(&self, mint: Pubkey, owner: Pubkey, liquidity: u64) {
-        use std::time::SystemTime;
-
-        let timestamp = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let mint_ctx = self.mints.entry(mint)
-            .or_insert_with(|| MintContext {
-                mint,
-                decimals: None,
-                pools: Arc::new(DashMap::new()),
-            });
-
-        mint_ctx.pools.insert(owner, PoolLiquidity {
-            owner,
-            liquidity,
-            last_updated: timestamp,
-        });
-    }
-
-    pub fn upsert_mint_decimals(&self, mint: Pubkey, decimals: u8) {
-        let mut mint_ctx = self.mints.entry(mint)
-            .or_insert_with(|| MintContext {
-                mint,
-                decimals: None,
-                pools: Arc::new(DashMap::new()),
-            });
-
-        // Update decimals if not already set
-        if mint_ctx.decimals.is_none() {
-            mint_ctx.decimals = Some(decimals);
-        }
+    pub fn add_mint_data(&self, token_account: String, data: MintData) {
+        self.token_account_data.insert(token_account, data);
     }
 }
 
-pub struct ArbTransaction {
-    pub signature: Signature,
-    pub is_success: bool,
-    pub instructions: Vec<ArbTransactionInstruction>,
-    pub program_instructions: Vec<ProgramInstruction>,
-    pub timestamp: i64,
+pub struct ProcessedTransaction {
+    pub signature: String,
+    pub err: Option<TransactionError>,
+    pub instructions: Vec<ParsedInstruction>,
+    pub timestamp: u64,
 }
 
-#[derive(Default, Clone)]
-pub struct ArbProgramStats {
-    pub success_count: usize,
-    pub fail_count: usize,
+pub struct ParsedInstruction {
+    pub program_id: String,
+    pub inner_instrucions: Vec<ParseInnerInstructionEnum>,
 }
 
-#[derive(Debug)]
-pub enum ArbTransactionInstruction {
-    Raw(InnerInstruction, Vec<InnerInstruction>),
-    DexSwap(DexSwap),
-}
-
-#[derive(Default)]
-pub struct SwapInfo {
-    pub program_id: Pubkey,
-    pub fees: Vec<token::TokenAmount>,
-    pub amount_out: token::TokenAmount,
-    pub amount_in: token::TokenAmount,
-    pub mint_in: Pubkey,
-    pub mint_out: Pubkey,
+pub enum ParseInnerInstructionEnum {
+    Swap(SwapInstruction),
+    Other,
 }
 
 pub struct SwapInstruction {
-    pub instruction: InnerInstruction,
-    pub inner_instructions: Vec<InnerInstruction>,
+    pub swap_program_id: Pubkey,
+    pub pools: Vec<Pubkey>,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub token_in: String, // mint program_id
+    pub token_out: String, // mint program_id
+    pub fees: Vec<(String, u64)>,
 }
 
-pub struct MintContext {
-    pub mint: Pubkey,
-    pub decimals: Option<u8>,
-    pub pools: Arc<DashMap<Pubkey, PoolLiquidity>>,
+#[derive(Clone, Debug)]
+pub struct Mint {
+    pub program_id: String,
+    pub decimals: u32,
 }
 
-pub struct PoolLiquidity {
-    pub owner: Pubkey,
-    pub liquidity: u64,
-    pub last_updated: i64,
+pub struct MintData {
+    pub mint: String,
+    pub liquidity:  u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct TokenAccount {
     pub account: Pubkey,
     pub token_info: TokenInfo,
-    pub owner: Option<Pubkey>,  // Owner/authority from TokenBalance (PDA)
+    pub owner: Option<Pubkey>,
 }
 
 pub type TokenAccounts = HashMap<Pubkey, TokenAccount>;
-
-pub mod prelude {
-    pub use super::{ArbTransactionInstruction, TokenAccount};
-    pub use super::token::TokenWithAmount;
-}

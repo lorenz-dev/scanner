@@ -15,9 +15,18 @@ use yellowstone_grpc_proto::prelude::{
 };
 use solana_sdk::pubkey::Pubkey;
 
-use crate::{Mint, SwapInstruction, TokenAccount, TokenAccounts};
-use crate::token::TokenAmount;
+use crate::{ArbTransactionInstruction, TokenAccount, TokenAccounts, token::{TokenAmount, TokenWithAmount}};
 
+#[derive(Debug)]
+pub struct DexSwap {
+    pub swap_program_id: Pubkey,
+    pub pools: Vec<Pubkey>,
+    pub pool_owner: Pubkey,  // Authority/owner of the pool (PDA address)
+    pub token_in: TokenAmount,
+    pub token_out: TokenAmount,
+    pub fees: Vec<TokenAmount>,
+    pub vault_accounts: Vec<Pubkey>,  // Token accounts (vaults) involved in this swap
+}
 
 pub struct DexConfig {
     pub name: &'static str,
@@ -37,7 +46,7 @@ pub type ParserFn = fn(
     &Vec<&InnerInstruction>,
     &Vec<Pubkey>,
     &TokenAccounts,
-) -> Result<SwapInstruction, DexParserError>;
+) -> Result<DexSwap, DexParserError>;
 
 #[derive(Debug)]
 pub enum DexParserError {
@@ -67,10 +76,10 @@ pub trait DexParser: Send + Sync {
     fn parse(
         &self,
         instruction: &InnerInstruction,
-        inner_instructions: &Vec<InnerInstruction>,
-        accounts: &Vec<String>,
-        token_accounts: &HashMap<String, Mint>
-    ) -> Result<SwapInstruction, DexParserError> {
+        inner_instructions: Vec<&InnerInstruction>,
+        accounts: &Vec<Pubkey>,
+        token_accounts: &TokenAccounts,
+    ) -> Result<DexSwap, DexParserError> {
         let config = self.config();
         let discriminator_len = config.discriminator_length;
 
@@ -80,40 +89,14 @@ pub trait DexParser: Send + Sync {
 
         let program_id = accounts.get(instruction.program_id_index as usize).unwrap();
 
-        // Convert String accounts to Pubkey
-        let pubkey_accounts: Vec<Pubkey> = accounts
-            .iter()
-            .filter_map(|s| s.parse::<Pubkey>().ok())
-            .collect();
-
-        // Convert token_accounts from HashMap<String, Mint> to TokenAccounts
-        let token_accts: TokenAccounts = token_accounts
-            .iter()
-            .filter_map(|(k, v)| {
-                k.parse::<Pubkey>().ok().map(|pubkey| {
-                    (pubkey, TokenAccount {
-                        account: pubkey,
-                        token_info: crate::token::TokenInfo {
-                            mint: v.program_id.parse::<Pubkey>().unwrap_or_default(),
-                            decimals: v.decimals as u8,
-                        },
-                        owner: None,
-                    })
-                })
-            })
-            .collect();
-
-        // Collect references to inner instructions
-        let inner_refs: Vec<&InnerInstruction> = inner_instructions.iter().collect();
-
         // Find matching discriminator
         for disc_config in &config.discriminators {
             if disc_config.discriminator == discriminator {
                 let swap = (disc_config.parse_fn)(
                     instruction,
-                    &inner_refs,
-                    &pubkey_accounts,
-                    &token_accts,
+                    &inner_instructions,
+                    accounts,
+                    token_accounts,
                 )?;
                 return Ok(swap);
             }
@@ -168,21 +151,12 @@ impl DexRegistry {
     }
 
     /// Parse a DEX instruction by looking up the appropriate parser
-    pub fn parse(
-        &self,
-        instruction: &InnerInstruction,
-        inner_instructions: &Vec<InnerInstruction>,
-        accounts: &Vec<String>,
-        token_accounts: &HashMap<String, Mint>
-    ) -> Result<SwapInstruction, DexParserError> {
-        let program_id_str = accounts.get(instruction.program_id_index as usize).unwrap();
-        let program_id = program_id_str.parse::<Pubkey>()
-            .map_err(|_| DexParserError::ParserNotFound(program_id_str.to_string()))?;
-
+    pub fn parse(&self, instruction: &InnerInstruction, inner_instructions: Vec<&InnerInstruction>, accounts: &Vec<Pubkey>, token_accounts: &TokenAccounts) -> Result<DexSwap, DexParserError> {
+        let program_id = accounts.get(instruction.program_id_index as usize).unwrap();
         if let Some(parser) = self.parsers.get(&program_id) {
             parser.parse(instruction, inner_instructions, &accounts, token_accounts)
         } else {
-            Err(DexParserError::ParserNotFound(program_id_str.to_string()))
+            Err(DexParserError::ParserNotFound(program_id.to_string()))
         }
     }
 

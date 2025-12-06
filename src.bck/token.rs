@@ -2,7 +2,7 @@ use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use yellowstone_grpc_proto::prelude::InnerInstruction;
 
-use crate::{TokenAccounts};
+use crate::{TokenAccount, TokenAccounts};
 
 const TOKEN_PROGRAM: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");

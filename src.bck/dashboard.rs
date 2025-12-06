@@ -20,13 +20,13 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 
 use crate::{ArbTransaction, ArbTransactionInstruction, ScannerContext};
-use crate::config::Config;
+use crate::config::ScannerConfig;
 use crate::grpc::{ConnectionStatus, GrpcConnectionStatus};
 
 /// Dashboard struct that manages the TUI
 pub struct Dashboard {
     scanner_context: Arc<ScannerContext>,
-    config: Config,
+    config: ScannerConfig,
 }
 
 /// Aggregated metrics for intermediate mints
@@ -73,7 +73,7 @@ struct MintOwnerInfo {
 
 impl Dashboard {
     /// Create a new Dashboard and run the TUI event loop
-    pub fn new(scanner_context: Arc<ScannerContext>, config: Config) -> Self {
+    pub fn new(scanner_context: Arc<ScannerContext>, config: ScannerConfig) -> Self {
         let dashboard = Self {
             scanner_context,
             config,

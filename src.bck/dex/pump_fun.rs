@@ -3,7 +3,7 @@ use solana_sdk::pubkey::Pubkey;
 use yellowstone_grpc_proto::prelude::InnerInstruction;
 use anyhow::Result;
 
-use crate::{SwapInstruction, TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DiscriminatorConfig}};
+use crate::{TokenAccount, TokenAccounts, dex::{DexConfig, DexParser, DexParserError, DexSwap, DiscriminatorConfig}, token::{self, Token, TokenAmount, TokenInfo, TokenWithAmount}};
 
 #[derive(Debug)]
 struct PumpFunCpiLog {
@@ -70,12 +70,12 @@ impl PumpFunParser {
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
         _token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
+    ) -> Result<DexSwap, DexParserError> {
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
         let swap_program_id = accounts[instruction.program_id_index as usize];
 
-        let _pool_market = instruction_accounts[0];
+        let pool_market = instruction_accounts[0];
 
         let base_mint = instruction_accounts[3];
         let quote_mint = instruction_accounts[4];
@@ -92,23 +92,38 @@ impl PumpFunParser {
         // Collect fees
         let mut fees = Vec::new();
         if cpi_log.lp_fee > 0 {
-            fees.push((base_mint.to_string(), cpi_log.lp_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.lp_fee,
+                mint: base_mint,
+            });
         }
         if cpi_log.protocol_fee > 0 {
-            fees.push((quote_mint.to_string(), cpi_log.protocol_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.protocol_fee,
+                mint: quote_mint,
+            });
         }
         if cpi_log.coin_creator_fee > 0 {
-            fees.push((quote_mint.to_string(), cpi_log.coin_creator_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.coin_creator_fee,
+                mint: quote_mint,
+            });
         }
 
-        Ok(SwapInstruction {
+        Ok(DexSwap {
             swap_program_id,
             pools: vec![pool_base, pool_mint],
-            amount_in: cpi_log.base_amount_in,
-            amount_out: cpi_log.user_quote_amount_out,
-            token_in: base_mint.to_string(),
-            token_out: quote_mint.to_string(),
+            pool_owner: cpi_log.pool,  // pool is the pool owner
+            token_in: TokenAmount {
+                amount: cpi_log.base_amount_in,
+                mint: base_mint,
+            },
+            token_out: TokenAmount {
+                amount: cpi_log.user_quote_amount_out,
+                mint: quote_mint,
+            },
             fees,
+            vault_accounts: Vec::new(),
         })
     }
 
@@ -117,12 +132,12 @@ impl PumpFunParser {
         inner_instructions: &Vec<&InnerInstruction>,
         accounts: &Vec<Pubkey>,
         _token_accounts: &TokenAccounts,
-    ) -> Result<SwapInstruction, DexParserError> {
+    ) -> Result<DexSwap, DexParserError> {
         let instruction_accounts = Self::get_instruction_accounts(instruction, accounts);
 
         let swap_program_id = accounts[instruction.program_id_index as usize];
 
-        let _pool_market = instruction_accounts[0];
+        let pool_market = instruction_accounts[0];
 
         let base_mint = instruction_accounts[3];
         let quote_mint = instruction_accounts[4];
@@ -157,23 +172,38 @@ impl PumpFunParser {
         // Collect fees
         let mut fees = Vec::new();
         if cpi_log.lp_fee > 0 {
-            fees.push((base_mint.to_string(), cpi_log.lp_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.lp_fee,
+                mint: base_mint,
+            });
         }
         if cpi_log.protocol_fee > 0 {
-            fees.push((quote_mint.to_string(), cpi_log.protocol_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.protocol_fee,
+                mint: quote_mint,
+            });
         }
         if cpi_log.coin_creator_fee > 0 {
-            fees.push((quote_mint.to_string(), cpi_log.coin_creator_fee));
+            fees.push(TokenAmount {
+                amount: cpi_log.coin_creator_fee,
+                mint: quote_mint,
+            });
         }
 
-        Ok(SwapInstruction {
+        Ok(DexSwap {
             swap_program_id,
             pools: vec![pool_base, pool_mint],
-            amount_in: cpi_log.base_amount_in,
-            amount_out: cpi_log.user_quote_amount_out,
-            token_in: base_mint.to_string(),
-            token_out: quote_mint.to_string(),
+            pool_owner: cpi_log.pool,  // pool is the pool owner
+            token_in: TokenAmount {
+                amount: cpi_log.base_amount_in,
+                mint: base_mint,
+            },
+            token_out: TokenAmount {
+                amount: cpi_log.user_quote_amount_out,
+                mint: quote_mint,
+            },
             fees,
+            vault_accounts: Vec::new(),
         })
     }
 
